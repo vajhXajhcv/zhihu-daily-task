@@ -181,6 +181,91 @@ class ZhihuPublisher:
                 pass
         return False
 
+    def _close_popups(self) -> bool:
+        """检测并关闭页面上的弹窗、活动广告、遮罩层。"""
+        close_selectors = [
+            'button[aria-label="关闭"]',
+            '.Modal-close',
+            '.Modal-closeButton',
+            '[data-testid="modal-close"]',
+            '.ZhiHuAppBanner-close',
+            '.AdBanner-close',
+            'button:has-text("不再提示")',
+            'button:has-text("我知道了")',
+            'button:has-text("跳过")',
+            'button:has-text("关闭")',
+        ]
+        closed_any = False
+        for selector in close_selectors:
+            try:
+                for loc in self.page.locator(selector).all():
+                    if loc.is_visible():
+                        loc.click(timeout=3000)
+                        self.random_delay(0.5, 1)
+                        closed_any = True
+            except Exception:
+                pass
+        if closed_any:
+            log("已关闭页面弹窗/广告")
+        return closed_any
+
+    def _select_column(self) -> bool:
+        """
+        处理文章发布时的专栏选择。
+        知乎写文章点击发布后，可能会弹出面板要求选择专栏（或个人主页）。
+        如果不选，发布按钮可能 disabled 或点了没反应，导致只进草稿箱。
+        """
+        column_indicators = [
+            'text=请选择专栏',
+            'text=未选择专栏',
+            '.PublishPanel-columnSelect',
+            '[data-testid="column-select"]',
+            '.ColumnSelect',
+        ]
+        has_column = False
+        for indicator in column_indicators:
+            try:
+                if self.page.locator(indicator).count() > 0:
+                    has_column = True
+                    break
+            except Exception:
+                pass
+
+        if not has_column:
+            return True
+
+        log("📂 检测到专栏选择，尝试自动选择...")
+
+        # 优先选"个人主页"
+        personal_options = [
+            'text=个人主页',
+            'text=不选专栏',
+            'label:has-text("个人主页")',
+            '[data-testid="personal-home"]',
+        ]
+        for option in personal_options:
+            try:
+                self.page.click(option, timeout=3000)
+                log("已选择：个人主页")
+                self.random_delay(1, 2)
+                return True
+            except Exception:
+                pass
+
+        #  fallback：选第一个可用选项
+        try:
+            first = self.page.locator('.ColumnSelect-item, [data-testid="column-option"], .ColumnOption').first
+            if first.is_visible():
+                first.click(timeout=3000)
+                log("已选择第一个可用专栏")
+                self.random_delay(1, 2)
+                return True
+        except Exception:
+            pass
+
+        log("⚠️ 未能自动选择专栏，发布可能失败")
+        return False
+
     def _verify_published(self, original_url: str | None = None) -> bool:
         """验证发布是否成功（URL 变化或出现成功提示）。"""
         try:
@@ -324,6 +409,7 @@ class ZhihuPublisher:
                 return False
 
             self.random_delay(2, 3)
+            self._close_popups()
 
             # 等待编辑器加载
             editor_selector = '.ProseMirror, .RichText-editor, [contenteditable="true"]'
@@ -337,6 +423,7 @@ class ZhihuPublisher:
 
             # 滚动查看内容
             self.scroll_slowly()
+            self._close_popups()
 
             # 点击发布按钮（等待可用后点击）
             publish_selectors = [
@@ -398,12 +485,14 @@ class ZhihuPublisher:
                 return False
 
             self.random_delay(2, 3)
+            self._close_popups()
 
             # 输入内容（清理 Markdown 标记）
             editor_selector = 'textarea, [contenteditable="true"]'
             self.page.wait_for_selector(editor_selector, timeout=10000)
             self.page.fill(editor_selector, self._clean_markdown(content))
             self.random_delay(2, 4)
+            self._close_popups()
 
             # 发布（等待可用后点击）
             publish_selectors = [
@@ -464,6 +553,7 @@ class ZhihuPublisher:
                 self.page.goto("https://zhuanlan.zhihu.com/write", wait_until="domcontentloaded")
 
             self.random_delay(3, 5)
+            self._close_popups()
 
             # 输入标题
             title_selector = 'input[placeholder*="标题"], .WriteIndex-titleInput'
@@ -478,8 +568,9 @@ class ZhihuPublisher:
 
             # 滚动查看
             self.scroll_slowly()
+            self._close_popups()
 
-            # 发布文章（等待可用后点击 + 二次确认 + 成功验证）
+            # 发布文章（等待可用后点击 + 专栏选择 + 二次确认 + 成功验证）
             publish_selectors = [
                 'button:has-text("发布文章")',
                 'button:has-text("发布")',
@@ -491,6 +582,8 @@ class ZhihuPublisher:
 
             original_url = self.page.url
             if self._wait_and_click(publish_selectors, timeout=15000, post_delay=(2, 3)):
+                # 点击发布后，可能出现专栏选择面板
+                self._select_column()
                 self._handle_publish_confirm()
                 if self._verify_published(original_url=original_url):
                     log("✅ 文章发布成功")
