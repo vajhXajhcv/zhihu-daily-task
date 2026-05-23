@@ -29,6 +29,20 @@ python scheduler.py --now
 python scheduler.py --now --headless
 ```
 
+### 4. 守护进程模式（推荐日常使用）
+
+无需配置系统计划任务，直接后台运行：
+
+```bash
+# 有头模式（推荐首次使用，观察浏览器操作）
+python scheduler.py --daemon
+
+# 无头模式（后台静默运行，适合长期挂机）
+python scheduler.py --daemon --headless
+```
+
+守护进程会每分钟检查一次时间，到达 `config/topics.yaml` 中配置的发布时间点（默认 08:00、12:30、20:00）自动执行发布。按 `Ctrl+C` 停止。
+
 ---
 
 ## 📋 系统功能说明

@@ -7,10 +7,14 @@
   3. 智能风控检测，遇到验证码自动暂停24小时
   4. 记录发布历史，避免重复发布
   5. 随机延迟模拟真人操作
+  6. 内置守护进程模式，无需系统定时任务
 
 使用：
     # 立即执行一次发布任务
     python scheduler.py --now
+
+    # 守护进程模式（后台自动按配置时间发布）
+    python scheduler.py --daemon
 
     # 查看发布历史
     python scheduler.py --history
@@ -18,7 +22,7 @@
     # 查看今日统计
     python scheduler.py --stats
 
-    # 定时运行（配合 Windows 计划任务或 Linux cron）
+    # 单次检查（配合 Windows 计划任务或 Linux cron）
     python scheduler.py
 """
 
@@ -354,6 +358,63 @@ class PublishScheduler:
                 remaining = (pause_time - datetime.now()).total_seconds() / 3600
                 print(f"\n  ⚠️ 当前暂停中，剩余 {remaining:.1f} 小时")
 
+    def run_daemon(self, headless: bool = False) -> None:
+        """
+        守护进程模式：后台循环运行，按配置时间点自动发布。
+
+        逻辑：
+          - 每分钟检查一次当前时间
+          - 匹配 schedule 中的时间点且今天未执行过，则触发发布
+          - 新的一天自动清空执行记录
+          - Ctrl+C 优雅退出
+        """
+        log("=" * 60)
+        log("🔁 守护进程启动")
+        log("按 Ctrl+C 停止")
+        log("=" * 60)
+
+        executed_today: set[str] = set()
+        last_date = datetime.now().date()
+
+        while True:
+            try:
+                now = datetime.now()
+                current_date = now.date()
+                current_time = f"{now.hour:02d}:{now.minute:02d}"
+
+                # 新的一天，清空执行记录
+                if current_date != last_date:
+                    executed_today.clear()
+                    last_date = current_date
+                    log("🌅 新的一天，已清空执行记录")
+
+                # 检查是否在发布时段内
+                schedule = self.config.get("schedule", [])
+                for slot in schedule:
+                    if not slot.get("enabled", True):
+                        continue
+                    slot_time = slot["time"]
+                    if slot_time == current_time and slot_time not in executed_today:
+                        log(f"⏰ 到达发布时间点：{slot_time}")
+                        self.run_once(headless=headless)
+                        executed_today.add(slot_time)
+                        break
+
+                # 睡眠到下一分钟（对齐到整分钟）
+                next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+                sleep_seconds = (next_minute - datetime.now()).total_seconds()
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+
+            except KeyboardInterrupt:
+                log("=" * 60)
+                log("🛑 收到停止信号，守护进程退出")
+                log("=" * 60)
+                break
+            except Exception as e:
+                log(f"❌ 守护进程异常：{e}")
+                time.sleep(60)
+
 
 def main():
     """主函数。"""
@@ -368,6 +429,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="知乎自动发布调度器")
     parser.add_argument("--now", action="store_true", help="立即执行一次发布")
+    parser.add_argument("--daemon", action="store_true", help="守护进程模式（后台按配置时间自动发布）")
     parser.add_argument("--history", action="store_true", help="查看发布历史")
     parser.add_argument("--stats", action="store_true", help="查看统计信息")
     parser.add_argument("--headless", action="store_true", help="无头模式运行")
@@ -387,7 +449,11 @@ def main():
         success = scheduler.run_once(headless=args.headless)
         return 0 if success else 1
 
-    # 默认：检查是否到了发布时间
+    if args.daemon:
+        scheduler.run_daemon(headless=args.headless)
+        return 0
+
+    # 默认：检查是否到了发布时间（单次运行，配合外部定时任务）
     now = datetime.now()
     current_time = f"{now.hour:02d}:{now.minute:02d}"
 

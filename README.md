@@ -119,6 +119,21 @@ python scheduler.py --now
 python scheduler.py --now --headless
 ```
 
+### 守护进程模式（内置定时）
+
+无需配置系统计划任务，直接后台运行：
+
+```bash
+# 有头模式（推荐首次使用，可观察浏览器操作）
+python scheduler.py --daemon
+
+# 无头模式（后台静默运行）
+python scheduler.py --daemon --headless
+```
+
+守护进程会每分钟检查一次时间，到达配置的发布时间点自动执行。
+按 `Ctrl+C` 停止。
+
 ### 查看发布状态
 
 ```bash
@@ -129,9 +144,18 @@ python scheduler.py --history
 python scheduler.py --stats
 ```
 
-### 配置定时任务
+### 定时任务方式（二选一）
 
-#### Windows 系统
+#### 方式一：内置守护进程（推荐，最简单）
+
+```bash
+# 直接后台运行，无需系统定时任务
+python scheduler.py --daemon --headless
+```
+
+#### 方式二：系统定时任务（传统方式）
+
+**Windows 系统**
 
 1. 修改 `run_scheduler.bat` 中的路径
 2. 按照 [Windows 计划任务配置指南](docs/WINDOWS_TASK_SETUP.md) 设置定时任务
@@ -150,7 +174,7 @@ schtasks /create /tn "知乎自动发布-中午" /tr "E:\zhihu-daily-task\run_sc
 schtasks /create /tn "知乎自动发布-晚上" /tr "E:\zhihu-daily-task\run_scheduler.bat" /sc daily /st 20:00 /f
 ```
 
-#### Linux/Mac 系统
+**Linux/Mac 系统**
 
 1. 修改 `run_scheduler.sh` 中的路径
 2. 添加执行权限：`chmod +x run_scheduler.sh`
