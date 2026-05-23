@@ -1,0 +1,102 @@
+# 知乎自动发布话题池配置
+# 支持三种发布类型：answer（回答问题）、idea（想法）、article（文章）
+
+topics:
+  # 文学理论类
+  - title: "如何理解王国维《人间词话》中的'境界'说？"
+    category: "文学理论"
+    type: "article"
+    question_url: ""  # 留空则自动搜索问题
+
+  - title: "中国古典园林的审美特征"
+    category: "建筑美学"
+    type: "article"
+
+  - title: "印象派绘画对现代艺术的影响"
+    category: "艺术史"
+    type: "article"
+
+  - title: "《红楼梦》中的诗词与人物性格"
+    category: "古典文学"
+    type: "article"
+
+  - title: "巴洛克音乐的复调艺术"
+    category: "音乐鉴赏"
+    type: "article"
+
+  - title: "宋代文人画的精神内核"
+    category: "中国画"
+    type: "article"
+
+  - title: "存在主义哲学对文学创作的影响"
+    category: "哲学与文学"
+    type: "article"
+
+  - title: "敦煌壁画的艺术价值与保护"
+    category: "文化遗产"
+    type: "article"
+
+  - title: "中国传统戏曲的虚拟性美学"
+    category: "戏剧理论"
+    type: "article"
+
+  - title: "西方古典雕塑的人体美学"
+    category: "雕塑艺术"
+    type: "article"
+
+  - title: "唐诗宋词中的自然意象"
+    category: "古典诗词"
+    type: "article"
+
+  - title: "文艺复兴时期的人文主义思想"
+    category: "思想史"
+    type: "article"
+
+  - title: "中国书法的线条美学"
+    category: "书法艺术"
+    type: "article"
+
+  - title: "电影的蒙太奇语言艺术"
+    category: "电影理论"
+    type: "article"
+
+  - title: "日本物哀美学的文化根源"
+    category: "比较美学"
+    type: "article"
+
+  - title: "《诗经》中的民俗与礼制"
+    category: "古代文化"
+    type: "article"
+
+  - title: "现代主义文学的叙事革新"
+    category: "现代文学"
+    type: "article"
+
+  - title: "中国古代建筑的木构体系"
+    category: "建筑技术"
+    type: "article"
+
+  - title: "抽象表现主义绘画的艺术语言"
+    category: "现代艺术"
+    type: "article"
+
+  - title: "《庄子》的寓言艺术"
+    category: "先秦哲学"
+    type: "article"
+
+# 发布时段配置（24小时制）
+schedule:
+  - time: "08:00"
+    enabled: true
+  - time: "12:30"
+    enabled: true
+  - time: "20:00"
+    enabled: true
+
+# 发布设置
+settings:
+  random_delay_min: 30      # 最小延迟（秒）
+  random_delay_max: 300     # 最大延迟（秒）
+  pause_on_captcha: true    # 遇到验证码时暂停
+  pause_duration: 86400     # 暂停时长（秒，24小时）
+  max_daily_posts: 3        # 每日最大发布数
