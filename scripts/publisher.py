@@ -328,40 +328,115 @@ class ZhihuPublisher:
                 return True
         return False
 
-    def search_question(self, question_title: str) -> str | None:
-        """搜索问题并返回第一个匹配的问题 URL。"""
+    def search_question(self, question_title: str, retries: int = 2) -> str | None:
+        """搜索问题并返回第一个匹配的问题 URL。支持重试。"""
         log(f"搜索问题：{question_title}")
 
+        for attempt in range(retries + 1):
+            if attempt > 0:
+                log(f"搜索重试第 {attempt} 次...")
+                self.random_delay(3, 5)
+
+            try:
+                self.page.goto(ZHIHU_SEARCH, wait_until="domcontentloaded")
+                self.random_delay(2, 3)
+                self._close_popups()
+
+                # 输入搜索关键词
+                search_input = 'input[placeholder*="搜索"]'
+                self.page.wait_for_selector(search_input, timeout=15000)
+                self.page.fill(search_input, question_title)
+                self.random_delay(1, 2)
+                self.page.keyboard.press("Enter")
+
+                # 等待搜索结果（用 domcontentloaded 避免 networkidle 超时）
+                self.page.wait_for_load_state("domcontentloaded", timeout=20000)
+                self.random_delay(2, 4)
+
+                # 查找问题链接（多种策略）
+                question_links = self.page.locator('a[href*="/question/"]').all()
+                if question_links:
+                    for link in question_links[:3]:
+                        href = link.get_attribute("href")
+                        if href:
+                            full_url = f"https://www.zhihu.com{href}" if href.startswith("/") else href
+                            log(f"找到问题：{full_url}")
+                            return full_url
+
+                log(f"第 {attempt + 1} 次搜索未找到匹配的问题")
+
+            except Exception as e:
+                log(f"搜索问题失败（第 {attempt + 1} 次）：{e}")
+
+        log("搜索问题最终失败")
+        return None
+
+    def fetch_invited_questions(self) -> list[dict]:
+        """
+        从知乎通知中心获取'邀请你回答'的问题列表。
+        返回 [{'title': ..., 'url': ...}, ...]
+        """
+        log("正在获取邀请回答的问题列表...")
+        invited = []
+
         try:
-            self.page.goto(ZHIHU_SEARCH, wait_until="domcontentloaded")
-            self.random_delay(2, 3)
+            # 知乎通知中心
+            self.page.goto("https://www.zhihu.com/notifications", wait_until="domcontentloaded")
+            self.random_delay(3, 5)
+            self._close_popups()
 
-            # 输入搜索关键词
-            search_input = 'input[placeholder*="搜索"]'
-            self.page.wait_for_selector(search_input, timeout=10000)
-            self.page.fill(search_input, question_title)
-            self.random_delay(1, 2)
-            self.page.keyboard.press("Enter")
+            # 策略1：通过通知项文本定位
+            notification_selectors = [
+                '.NotificationList-item',
+                '.Notification-item',
+                '[class*="NotificationList"] > div',
+                '[class*="notification"]',
+            ]
 
-            # 等待搜索结果
-            self.page.wait_for_load_state("networkidle", timeout=15000)
-            self.random_delay(2, 3)
+            for sel in notification_selectors:
+                try:
+                    items = self.page.locator(sel).all()
+                    for item in items:
+                        try:
+                            text = item.inner_text()
+                            # 判断是否为邀请回答的通知
+                            if any(k in text for k in ["邀请", "邀请你回答"]):
+                                links = item.locator('a[href*="/question/"]').all()
+                                for link in links:
+                                    href = link.get_attribute("href")
+                                    title = link.inner_text()
+                                    if href and title and len(title) > 3:
+                                        full_url = f"https://www.zhihu.com{href}" if href.startswith("/") else href
+                                        # 去重
+                                        if not any(q["url"] == full_url for q in invited):
+                                            invited.append({"title": title.strip(), "url": full_url})
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
 
-            # 查找问题链接
-            question_links = self.page.locator('a[href*="/question/"]').all()
-            if question_links:
-                href = question_links[0].get_attribute("href")
-                if href:
-                    full_url = f"https://www.zhihu.com{href}" if href.startswith("/") else href
-                    log(f"找到问题：{full_url}")
-                    return full_url
+            # 策略2：直接从页面所有问题链接中筛选
+            if not invited:
+                all_links = self.page.locator('a[href*="/question/"]').all()
+                seen = set()
+                for link in all_links[:20]:
+                    try:
+                        href = link.get_attribute("href")
+                        title = link.inner_text()
+                        if href and title and len(title) > 3:
+                            full_url = f"https://www.zhihu.com{href}" if href.startswith("/") else href
+                            if full_url not in seen:
+                                seen.add(full_url)
+                                invited.append({"title": title.strip(), "url": full_url})
+                    except Exception:
+                        pass
 
-            log("未找到匹配的问题")
-            return None
+            log(f"找到 {len(invited)} 个邀请问题")
+            return invited
 
         except Exception as e:
-            log(f"搜索问题失败：{e}")
-            return None
+            log(f"获取邀请问题失败：{e}")
+            return []
 
     def publish_answer(
         self,
@@ -369,12 +444,14 @@ class ZhihuPublisher:
         content: str,
         question_url: str | None = None
     ) -> bool:
-        """发布回答。"""
+        """发布回答。如果提供了 question_url 则直接访问，否则搜索问题。"""
         log(f"准备发布回答：{question_title}")
 
         try:
-            # 如果没有提供问题 URL，先搜索
-            if not question_url:
+            # 如果提供了问题 URL，直接访问；否则搜索
+            if question_url:
+                log(f"使用指定问题 URL：{question_url}")
+            else:
                 question_url = self.search_question(question_title)
                 if not question_url:
                     log("无法找到问题，发布失败")

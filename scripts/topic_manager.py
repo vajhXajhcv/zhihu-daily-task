@@ -13,6 +13,7 @@
     python scripts/topic_manager.py pick       # 随机选择一个话题
     python scripts/topic_manager.py list       # 列出所有话题
     python scripts/topic_manager.py clear      # 清空话题池
+    python scripts/topic_manager.py invited    # 从知乎同步邀请回答的问题
 """
 
 from __future__ import annotations
@@ -198,6 +199,30 @@ def clear_topics() -> None:
     log("话题池已清空")
 
 
+def sync_invited_questions(questions: list[dict]) -> int:
+    """将邀请回答的问题同步到话题池。"""
+    topics = load_topics()
+    existing_urls = {t.get("question_url", "") for t in topics}
+    added = 0
+
+    for q in questions:
+        url = q.get("url", "")
+        if url and url not in existing_urls:
+            topics.append({
+                "title": q["title"],
+                "type": "answer",
+                "category": "邀请回答",
+                "question_url": url,
+                "source": "invited",
+                "added_at": datetime.now().isoformat()
+            })
+            added += 1
+
+    save_topics(topics)
+    log(f"已同步 {added} 个邀请问题到话题池")
+    return added
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
@@ -232,6 +257,25 @@ def main() -> int:
     elif command == "clear":
         clear_topics()
         return 0
+
+    elif command == "invited":
+        log("从知乎获取邀请回答的问题...")
+        try:
+            from publisher import ZhihuPublisher
+            with ZhihuPublisher(headless=False) as publisher:
+                questions = publisher.fetch_invited_questions()
+                if questions:
+                    print(f"\n找到 {len(questions)} 个邀请问题：\n")
+                    for i, q in enumerate(questions, 1):
+                        print(f"{i}. {q['title']}")
+                        print(f"   {q['url']}\n")
+                    sync_invited_questions(questions)
+                else:
+                    log("未找到邀请回答的问题")
+            return 0
+        except Exception as e:
+            log(f"获取邀请问题失败：{e}")
+            return 1
 
     else:
         log(f"[错误] 未知命令：{command}")
