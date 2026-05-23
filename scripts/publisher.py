@@ -371,13 +371,19 @@ class ZhihuPublisher:
         log("搜索问题最终失败")
         return None
 
-    def fetch_invited_questions(self) -> list[dict]:
+    def fetch_invited_questions(self) -> dict[str, list[dict]]:
         """
-        从知乎通知中心获取'邀请你回答'的问题列表。
-        返回 [{'title': ..., 'url': ...}, ...]
+        从知乎消息中心获取三类高权重问题。
+
+        Returns:
+            {
+                "invited":     [{"title": ..., "url": ..., "source": ...}, ...],  # 别人邀请你回答
+                "recommended": [{"title": ..., "url": ..., "source": ...}, ...],  # 知乎推荐你回答
+                "trending":    [{"title": ..., "url": ..., "source": ...}, ...],  # 人气/热门问题
+            }
         """
-        log("正在获取邀请回答的问题列表...")
-        invited = []
+        log("正在从知乎消息中心获取邀请/推荐/人气问题...")
+        result = {"invited": [], "recommended": [], "trending": []}
 
         try:
             # 知乎通知中心
@@ -385,12 +391,33 @@ class ZhihuPublisher:
             self.random_delay(3, 5)
             self._close_popups()
 
-            # 策略1：通过通知项文本定位
+            # 尝试点击"邀请回答"分类标签（新版知乎可能有）
+            tab_selectors = [
+                'text=邀请回答',
+                'a:has-text("邀请回答")',
+                'button:has-text("邀请回答")',
+                '[role="tab"]:has-text("邀请")',
+            ]
+            for tab_sel in tab_selectors:
+                try:
+                    self.page.click(tab_sel, timeout=3000)
+                    self.random_delay(2, 3)
+                    break
+                except Exception:
+                    pass
+
+            # 滚动加载更多通知（消息中心通常是懒加载）
+            for _ in range(3):
+                self.scroll_slowly()
+                self.random_delay(1, 2)
+
+            # 解析通知列表
             notification_selectors = [
                 '.NotificationList-item',
                 '.Notification-item',
                 '[class*="NotificationList"] > div',
-                '[class*="notification"]',
+                '[class*="notification"] > div',
+                '[class*="List-item"]',
             ]
 
             for sel in notification_selectors:
@@ -399,44 +426,50 @@ class ZhihuPublisher:
                     for item in items:
                         try:
                             text = item.inner_text()
-                            # 判断是否为邀请回答的通知
-                            if any(k in text for k in ["邀请", "邀请你回答"]):
-                                links = item.locator('a[href*="/question/"]').all()
-                                for link in links:
-                                    href = link.get_attribute("href")
-                                    title = link.inner_text()
-                                    if href and title and len(title) > 3:
-                                        full_url = f"https://www.zhihu.com{href}" if href.startswith("/") else href
-                                        # 去重
-                                        if not any(q["url"] == full_url for q in invited):
-                                            invited.append({"title": title.strip(), "url": full_url})
+                            if len(text) < 10:
+                                continue
+
+                            # 提取问题链接和标题
+                            links = item.locator('a[href*="/question/"]').all()
+                            for link in links:
+                                href = link.get_attribute("href")
+                                title = link.inner_text()
+                                if not href or not title or len(title) < 5:
+                                    continue
+
+                                full_url = f"https://www.zhihu.com{href}" if href.startswith("/") else href
+
+                                # 分类判断（按优先级）
+                                category = None
+                                if any(k in text for k in ["邀请你回答", "邀请你", "邀你回答"]):
+                                    category = "invited"
+                                elif any(k in text for k in ["推荐你回答", "为你推荐", "你可能感兴趣", "猜你想答"]):
+                                    category = "recommended"
+                                elif any(k in text for k in ["人气问题", "热门问题", "这些问题等你回答", "大家都在问", "热度飙升"]):
+                                    category = "trending"
+
+                                if category:
+                                    # 去重
+                                    existing_urls = {q["url"] for q in result[category]}
+                                    if full_url not in existing_urls:
+                                        result[category].append({
+                                            "title": title.strip(),
+                                            "url": full_url,
+                                            "source": category,
+                                            "context": text[:100].replace("\n", " ")
+                                        })
                         except Exception:
                             pass
                 except Exception:
                     pass
 
-            # 策略2：直接从页面所有问题链接中筛选
-            if not invited:
-                all_links = self.page.locator('a[href*="/question/"]').all()
-                seen = set()
-                for link in all_links[:20]:
-                    try:
-                        href = link.get_attribute("href")
-                        title = link.inner_text()
-                        if href and title and len(title) > 3:
-                            full_url = f"https://www.zhihu.com{href}" if href.startswith("/") else href
-                            if full_url not in seen:
-                                seen.add(full_url)
-                                invited.append({"title": title.strip(), "url": full_url})
-                    except Exception:
-                        pass
-
-            log(f"找到 {len(invited)} 个邀请问题")
-            return invited
+            total = sum(len(v) for v in result.values())
+            log(f"获取完成：邀请 {len(result['invited'])} / 推荐 {len(result['recommended'])} / 人气 {len(result['trending'])}（共 {total} 个）")
+            return result
 
         except Exception as e:
-            log(f"获取邀请问题失败：{e}")
-            return []
+            log(f"获取消息中心问题失败：{e}")
+            return result
 
     def publish_answer(
         self,

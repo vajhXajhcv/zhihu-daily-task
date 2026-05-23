@@ -199,28 +199,37 @@ def clear_topics() -> None:
     log("话题池已清空")
 
 
-def sync_invited_questions(questions: list[dict]) -> int:
-    """将邀请回答的问题同步到话题池。"""
+def sync_invited_questions(result: dict[str, list[dict]]) -> dict[str, int]:
+    """将邀请/推荐/人气问题同步到话题池，按分类保存。"""
     topics = load_topics()
     existing_urls = {t.get("question_url", "") for t in topics}
-    added = 0
+    counts = {"invited": 0, "recommended": 0, "trending": 0}
 
-    for q in questions:
-        url = q.get("url", "")
-        if url and url not in existing_urls:
-            topics.append({
-                "title": q["title"],
-                "type": "answer",
-                "category": "邀请回答",
-                "question_url": url,
-                "source": "invited",
-                "added_at": datetime.now().isoformat()
-            })
-            added += 1
+    category_map = {
+        "invited": "邀请回答",
+        "recommended": "推荐回答",
+        "trending": "人气问题",
+    }
+
+    for category, questions in result.items():
+        for q in questions:
+            url = q.get("url", "")
+            if url and url not in existing_urls:
+                topics.append({
+                    "title": q["title"],
+                    "type": "answer",
+                    "category": category_map.get(category, "其他"),
+                    "question_url": url,
+                    "source": category,
+                    "added_at": datetime.now().isoformat()
+                })
+                counts[category] += 1
+                existing_urls.add(url)
 
     save_topics(topics)
-    log(f"已同步 {added} 个邀请问题到话题池")
-    return added
+    total = sum(counts.values())
+    log(f"已同步 {total} 个问题：邀请 {counts['invited']} / 推荐 {counts['recommended']} / 人气 {counts['trending']}")
+    return counts
 
 
 def main() -> int:
@@ -259,19 +268,27 @@ def main() -> int:
         return 0
 
     elif command == "invited":
-        log("从知乎获取邀请回答的问题...")
+        log("从知乎消息中心获取邀请/推荐/人气问题...")
         try:
             from publisher import ZhihuPublisher
             with ZhihuPublisher(headless=False) as publisher:
-                questions = publisher.fetch_invited_questions()
-                if questions:
-                    print(f"\n找到 {len(questions)} 个邀请问题：\n")
-                    for i, q in enumerate(questions, 1):
-                        print(f"{i}. {q['title']}")
-                        print(f"   {q['url']}\n")
-                    sync_invited_questions(questions)
-                else:
-                    log("未找到邀请回答的问题")
+                result = publisher.fetch_invited_questions()
+                total = sum(len(v) for v in result.values())
+                if total == 0:
+                    log("未找到任何问题，请确认知乎消息中心有邀请/推荐/人气通知")
+                    return 0
+
+                labels = {"invited": "邀请回答", "recommended": "推荐回答", "trending": "人气问题"}
+                for cat, questions in result.items():
+                    if questions:
+                        print(f"\n【{labels.get(cat, cat)}】{len(questions)} 个：")
+                        for i, q in enumerate(questions, 1):
+                            print(f"  {i}. {q['title']}")
+                            print(f"     {q['url']}")
+
+                print()
+                counts = sync_invited_questions(result)
+                print(f"\n同步完成：邀请 {counts['invited']} / 推荐 {counts['recommended']} / 人气 {counts['trending']}")
             return 0
         except Exception as e:
             log(f"获取邀请问题失败：{e}")

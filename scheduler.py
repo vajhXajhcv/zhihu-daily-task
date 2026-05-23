@@ -147,7 +147,7 @@ class PublishScheduler:
         return False
 
     def pick_topic(self) -> dict | None:
-        """从配置中随机选择一个未发布的话题。"""
+        """从配置中随机选择一个未发布的话题。优先选邀请/推荐/人气问题。"""
         topics = self.config.get("topics", [])
         if not topics:
             log("配置中没有话题")
@@ -160,6 +160,16 @@ class PublishScheduler:
             log("所有话题都已发布过")
             return None
 
+        # 优先级：invited > recommended > trending > 普通话题
+        priority_sources = ["invited", "recommended", "trending"]
+        for source in priority_sources:
+            candidates = [t for t in unpublished if t.get("source") == source]
+            if candidates:
+                topic = random.choice(candidates)
+                log(f"优先选择【{source}】话题：{topic['title']} ({topic['category']})")
+                return topic
+
+        # 没有高优先级话题，从普通话题中随机选择
         topic = random.choice(unpublished)
         log(f"选择话题：{topic['title']} ({topic['category']})")
         return topic
