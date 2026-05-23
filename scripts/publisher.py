@@ -81,7 +81,10 @@ class ZhihuPublisher:
 
         log("启动浏览器...")
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=self.headless)
+        self.browser = self.playwright.chromium.launch(
+            headless=self.headless,
+            args=["--no-proxy-server"]
+        )
         self.context = self.browser.new_context(storage_state=str(COOKIE_FILE))
         self.page = self.context.new_page()
         log("浏览器启动成功")
