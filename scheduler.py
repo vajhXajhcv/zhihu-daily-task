@@ -371,10 +371,12 @@ class PublishScheduler:
     def run_daemon(self, headless: bool = False) -> None:
         """
         守护进程模式：后台循环运行，按配置时间点自动发布。
+        每 6 小时自动同步一次知乎消息中心的邀请/推荐/人气问题。
 
         逻辑：
           - 每分钟检查一次当前时间
           - 匹配 schedule 中的时间点且今天未执行过，则触发发布
+          - 每 6 小时自动拉取消息中心新问题
           - 新的一天自动清空执行记录
           - Ctrl+C 优雅退出
         """
@@ -385,18 +387,37 @@ class PublishScheduler:
 
         executed_today: set[str] = set()
         last_date = datetime.now().date()
+        last_sync_time = 0.0  # 上次同步时间戳
+        sync_interval = 6 * 3600  # 每 6 小时同步一次
 
         while True:
             try:
                 now = datetime.now()
                 current_date = now.date()
                 current_time = f"{now.hour:02d}:{now.minute:02d}"
+                current_timestamp = now.timestamp()
 
                 # 新的一天，清空执行记录
                 if current_date != last_date:
                     executed_today.clear()
                     last_date = current_date
                     log("🌅 新的一天，已清空执行记录")
+
+                # 每 6 小时自动同步邀请问题
+                if current_timestamp - last_sync_time >= sync_interval:
+                    log("🔄 开始自动同步知乎消息中心问题...")
+                    try:
+                        from publisher import ZhihuPublisher
+                        from topic_manager import sync_invited_questions
+                        with ZhihuPublisher(headless=headless) as publisher:
+                            result = publisher.fetch_invited_questions()
+                            counts = sync_invited_questions(result)
+                            total = sum(counts.values())
+                            if total > 0:
+                                log(f"✅ 自动同步完成：邀请 {counts['invited']} / 推荐 {counts['recommended']} / 人气 {counts['trending']}")
+                    except Exception as e:
+                        log(f"⚠️ 自动同步失败：{e}")
+                    last_sync_time = current_timestamp
 
                 # 检查是否在发布时段内
                 schedule = self.config.get("schedule", [])

@@ -199,12 +199,43 @@ def clear_topics() -> None:
     log("话题池已清空")
 
 
-def sync_invited_questions(result: dict[str, list[dict]]) -> dict[str, int]:
-    """将邀请/推荐/人气问题同步到话题池，按分类保存。"""
+def _load_published_urls() -> set[str]:
+    """加载已发布过的问题 URL，用于过滤。"""
+    history_file = ROOT / "data" / "published_history.json"
+    if not history_file.exists():
+        return set()
+    try:
+        with history_file.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        urls = set()
+        for record in data.get("history", []):
+            # 从 filepath 或 topic 中推断不出 URL，这里简单跳过
+            pass
+        return urls
+    except Exception:
+        return set()
+
+
+def sync_invited_questions(result: dict[str, list[dict]], max_per_category: int = 15) -> dict[str, int]:
+    """
+    将邀请/推荐/人气问题同步到话题池，按分类保存。
+    自动过滤已发布的、限制每类数量上限。
+    """
     topics = load_topics()
     existing_urls = {t.get("question_url", "") for t in topics}
-    counts = {"invited": 0, "recommended": 0, "trending": 0}
 
+    # 读取已发布过的话题标题（用于过滤）
+    history_file = ROOT / "data" / "published_history.json"
+    published_titles = set()
+    if history_file.exists():
+        try:
+            with history_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            published_titles = {r["topic"] for r in data.get("history", []) if r.get("success")}
+        except Exception:
+            pass
+
+    counts = {"invited": 0, "recommended": 0, "trending": 0}
     category_map = {
         "invited": "邀请回答",
         "recommended": "推荐回答",
@@ -212,23 +243,38 @@ def sync_invited_questions(result: dict[str, list[dict]]) -> dict[str, int]:
     }
 
     for category, questions in result.items():
-        for q in questions:
-            url = q.get("url", "")
-            if url and url not in existing_urls:
-                topics.append({
-                    "title": q["title"],
-                    "type": "answer",
-                    "category": category_map.get(category, "其他"),
-                    "question_url": url,
-                    "source": category,
-                    "added_at": datetime.now().isoformat()
-                })
-                counts[category] += 1
-                existing_urls.add(url)
+        # 过滤已发布的问题
+        new_questions = [
+            q for q in questions
+            if q.get("url") and q["url"] not in existing_urls and q["title"] not in published_titles
+        ]
+
+        for q in new_questions:
+            topics.append({
+                "title": q["title"],
+                "type": "answer",
+                "category": category_map.get(category, "其他"),
+                "question_url": q["url"],
+                "source": category,
+                "added_at": datetime.now().isoformat()
+            })
+            existing_urls.add(q["url"])
+            counts[category] += 1
+
+    # 清理：每类保留最新的 N 个，超出的删掉最旧的
+    for source in category_map.keys():
+        source_topics = [t for t in topics if t.get("source") == source]
+        if len(source_topics) > max_per_category:
+            # 按 added_at 排序，删掉最旧的
+            source_topics.sort(key=lambda x: x.get("added_at", ""))
+            to_remove = source_topics[:-max_per_category]
+            remove_titles = {t["title"] for t in to_remove}
+            topics = [t for t in topics if t.get("title") not in remove_titles or t.get("source") != source]
+            log(f"清理 {source} 类旧话题：移除 {len(to_remove)} 个，保留 {max_per_category} 个")
 
     save_topics(topics)
     total = sum(counts.values())
-    log(f"已同步 {total} 个问题：邀请 {counts['invited']} / 推荐 {counts['recommended']} / 人气 {counts['trending']}")
+    log(f"已同步 {total} 个新问题：邀请 {counts['invited']} / 推荐 {counts['recommended']} / 人气 {counts['trending']}")
     return counts
 
 
