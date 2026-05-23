@@ -45,6 +45,7 @@ except ImportError:
 from env_loader import load_env
 from content_generator import generate_content, save_content
 from publisher import ZhihuPublisher, log
+from reviewer import ContentReviewer
 
 # 加载环境变量
 load_env()
@@ -188,6 +189,19 @@ class PublishScheduler:
         # 保存到本地
         filepath = save_content(topic_title, content, category)
         log(f"💾 内容已保存：{filepath}")
+
+        # 内容质量审查（底线保障）
+        log("🔍 正在进行内容质量审查...")
+        reviewer = ContentReviewer()
+        review_result = reviewer.review(content, topic=topic_title)
+
+        if not review_result["passed"]:
+            log("❌ 内容审查未通过，禁止发布")
+            log(review_result["report"].replace("\n", "\n  "))
+            # 仍然保存内容到本地以便排查，但返回失败
+            return False, filepath
+
+        log(f"✅ 内容审查通过（得分：{review_result['total_score']:.1f}）")
 
         # 发布到知乎
         log(f"🚀 开始发布到知乎（类型：{topic_type}）")

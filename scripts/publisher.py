@@ -135,6 +135,75 @@ class ZhihuPublisher:
         """)
         self.random_delay(1, 2)
 
+    def _wait_and_click(self, selectors: list[str], timeout: int = 10000, post_delay: tuple = (2, 3)) -> bool:
+        """等待并点击第一个可用的元素（visible + enabled）。"""
+        deadline = time.time() + (timeout / 1000)
+        for selector in selectors:
+            try:
+                locator = self.page.locator(selector).first
+                # 1. 等待可见
+                locator.wait_for(state="visible", timeout=timeout)
+                # 2. 轮询等待 enabled（避开 disabled/loading 状态）
+                while time.time() < deadline:
+                    try:
+                        if locator.is_enabled() and not locator.is_disabled():
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(0.3)
+                # 3. 点击
+                locator.click(timeout=max(1000, int((deadline - time.time()) * 1000)))
+                if post_delay:
+                    self.random_delay(*post_delay)
+                return True
+            except Exception:
+                continue
+        return False
+
+    def _handle_publish_confirm(self) -> bool:
+        """处理可能出现的二次确认弹窗。"""
+        confirm_selectors = [
+            'button:has-text("确定发布")',
+            'button:has-text("确认")',
+            'button:has-text("确定")',
+            '.ModalButton--primary',
+            '[data-testid="publish-confirm"]',
+        ]
+        for selector in confirm_selectors:
+            try:
+                self.page.click(selector, timeout=5000)
+                self.random_delay(2, 3)
+                return True
+            except Exception:
+                pass
+        return False
+
+    def _verify_published(self, original_url: str | None = None) -> bool:
+        """验证发布是否成功（URL 变化或出现成功提示）。"""
+        try:
+            current_url = self.page.url
+            # 如果 URL 变了（跳转到文章页、回答页等），大概率成功
+            if original_url and current_url != original_url and "/draft" not in current_url:
+                return True
+            # 检查成功提示
+            success_indicators = [
+                "text=发布成功",
+                "text=已发布",
+                ".Notification-success",
+            ]
+            for indicator in success_indicators:
+                try:
+                    if self.page.locator(indicator).count() > 0:
+                        return True
+                except Exception:
+                    pass
+            # 检查是否仍在编辑器页面（如果仍在，可能没发布成功）
+            if "/write" in current_url or "/draft" in current_url:
+                return False
+            return True
+        except Exception:
+            return False
+
     def check_captcha(self) -> bool:
         """检测是否出现验证码。"""
         captcha_selectors = [
@@ -266,23 +335,27 @@ class ZhihuPublisher:
             # 滚动查看内容
             self.scroll_slowly()
 
-            # 点击发布按钮
+            # 点击发布按钮（等待可用后点击）
             publish_selectors = [
                 'button:has-text("发布回答")',
                 'button:has-text("发布")',
-                '.AnswerForm-submit',
+                'button.AnswerForm-submit',
+                '[data-testid="publish-button"]',
+                '.PublishButton',
             ]
 
-            for selector in publish_selectors:
-                try:
-                    self.page.click(selector, timeout=5000)
+            original_url = self.page.url
+            if self._wait_and_click(publish_selectors, timeout=10000, post_delay=(2, 3)):
+                self._handle_publish_confirm()
+                if self._verify_published(original_url=original_url):
                     log("✅ 回答发布成功")
                     self.random_delay(3, 5)
                     return True
-                except Exception:
-                    continue
+                else:
+                    log("⚠️ 点击发布按钮后未检测到成功状态，可能进了草稿箱")
+                    return False
 
-            log("未找到发布按钮")
+            log("未找到可用的发布按钮")
             return False
 
         except Exception as e:
@@ -329,22 +402,26 @@ class ZhihuPublisher:
             self.page.fill(editor_selector, self._clean_markdown(content))
             self.random_delay(2, 4)
 
-            # 发布
+            # 发布（等待可用后点击）
             publish_selectors = [
                 'button:has-text("发布")',
                 '.PushContent-submit',
+                '[data-testid="publish-button"]',
+                'button[type="submit"]',
             ]
 
-            for selector in publish_selectors:
-                try:
-                    self.page.click(selector, timeout=5000)
+            original_url = self.page.url
+            if self._wait_and_click(publish_selectors, timeout=10000, post_delay=(2, 3)):
+                self._handle_publish_confirm()
+                if self._verify_published(original_url=original_url):
                     log("✅ 想法发布成功")
                     self.random_delay(3, 5)
                     return True
-                except Exception:
-                    continue
+                else:
+                    log("⚠️ 点击发布按钮后未检测到成功状态，可能进了草稿箱")
+                    return False
 
-            log("未找到发布按钮")
+            log("未找到可用的发布按钮")
             return False
 
         except Exception as e:
@@ -399,36 +476,28 @@ class ZhihuPublisher:
             # 滚动查看
             self.scroll_slowly()
 
-            # 发布文章
+            # 发布文章（等待可用后点击 + 二次确认 + 成功验证）
             publish_selectors = [
                 'button:has-text("发布文章")',
                 'button:has-text("发布")',
                 '.PublishPanel-stepTwoButton',
+                '[data-testid="publish-button"]',
+                '.PublishButton',
+                'button[type="submit"]',
             ]
 
-            for selector in publish_selectors:
-                try:
-                    self.page.click(selector, timeout=5000)
-                    self.random_delay(2, 3)
-
-                    # 可能需要二次确认
-                    confirm_selectors = [
-                        'button:has-text("确定发布")',
-                        'button:has-text("确认")',
-                    ]
-                    for confirm_sel in confirm_selectors:
-                        try:
-                            self.page.click(confirm_sel, timeout=3000)
-                        except Exception:
-                            pass
-
+            original_url = self.page.url
+            if self._wait_and_click(publish_selectors, timeout=15000, post_delay=(2, 3)):
+                self._handle_publish_confirm()
+                if self._verify_published(original_url=original_url):
                     log("✅ 文章发布成功")
                     self.random_delay(3, 5)
                     return True
-                except Exception:
-                    continue
+                else:
+                    log("⚠️ 点击发布按钮后未检测到成功状态，可能进了草稿箱")
+                    return False
 
-            log("未找到发布按钮")
+            log("未找到可用的发布按钮")
             return False
 
         except Exception as e:
